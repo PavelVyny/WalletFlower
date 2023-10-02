@@ -1,27 +1,31 @@
 version: '3.7'
 
 services:
-  postgres:
+  postgres-auth:
     image: postgres:latest
+    env_file:
+      - ./auth-service/.env
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: dbname
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
     ports:
       - "5432:5432"
+    volumes:
+      - pgdata-auth:/var/lib/postgresql/data
+
   auth-service:
     build:
       context: ./auth-service
       dockerfile: Dockerfile
     ports:
       - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres-auth:5432/${DB_NAME}
+    env_file:
+      - ./auth-service/.env
     depends_on:
-      - postgres
-  todo-service:
-    build:
-      context: ./todo-service
-      dockerfile: Dockerfile
-    ports:
-      - "3002:3002"
-    depends_on:
-      - postgres
+      - postgres-auth
+
+volumes:
+  pgdata-auth:

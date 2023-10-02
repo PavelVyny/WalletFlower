@@ -1,0 +1,23 @@
+version: '3.7'
+
+services:
+  postgres-auth:
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: authdb
+    volumes:
+      - pgdata-auth:/var/lib/postgresql/data
+
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile.prod
+    environment:
+      DATABASE_URL: postgresql://user:password@postgres-auth:5432/authdb
+    depends_on:
+      - postgres-auth
+
+volumes:
+  pgdata-auth:
