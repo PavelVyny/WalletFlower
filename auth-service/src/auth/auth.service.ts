@@ -2,6 +2,7 @@ import * as bcrypt from 'bcrypt';
 import * as jwt from 'jsonwebtoken';
 import {
   Injectable,
+  Inject,
   ConflictException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -10,10 +11,12 @@ import { LoginDto } from './dto/login.dto';
 import { PrismaUserRepository } from 'src/users/repositories/prisma.user.repository';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'prisma/prisma.service';
+import { JwtPayload } from 'src/types/jwt-payload.interface';
 
 @Injectable()
 export class AuthService {
   constructor(
+    @Inject('IUserRepository') // Inject using the custom provider token
     private readonly userRepository: PrismaUserRepository,
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
@@ -88,14 +91,43 @@ export class AuthService {
   async refresh(
     refreshToken: string,
   ): Promise<{ accessToken: string; refreshToken: string }> {
-    try {
-      const secretKey = this.configService.get<string>('JWT_SECRET_KEY');
+    const secretKey = this.configService.get<string>('JWT_SECRET_KEY');
 
-      const payload = jwt.verify(refreshToken, secretKey);
+    try {
+      // Verify the refresh token
+      const decoded = jwt.verify(refreshToken, secretKey) as JwtPayload;
+      // Check the session
+      const session = await this.prisma.session.findUnique({
+        where: { token: refreshToken },
+      });
+
+      if (!session || session.expiresAt < new Date()) {
+        throw new UnauthorizedException('Invalid refresh token');
+      }
+
+      // Check the user
+      const user = await this.userRepository.findByEmail(decoded.email);
+      if (!user) {
+        throw new UnauthorizedException('User not found');
+      }
+
+      const payload = { email: user.email, id: user.id };
+
+      const newAccessToken = this.generateJwt(payload, '5m');
+      const newRefreshToken = this.generateJwt(payload, '30d');
+
+      // Update the session
+      await this.prisma.session.update({
+        where: { token: refreshToken },
+        data: {
+          token: newRefreshToken,
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+        },
+      });
 
       return {
-        accessToken: this.generateJwt(payload, '5m'),
-        refreshToken: this.generateJwt(payload, '30d'),
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
       };
     } catch (error) {
       throw new UnauthorizedException('Invalid refresh token');

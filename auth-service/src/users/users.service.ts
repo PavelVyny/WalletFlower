@@ -1,11 +1,14 @@
 // users/users.service.ts
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common'; // Import Inject
 import { IUserRepository } from './interfaces/user.repository.interface';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly userRepository: IUserRepository) {}
+  constructor(
+    @Inject('IUserRepository') // Use Inject with the custom provider token
+    private readonly userRepository: IUserRepository,
+  ) {}
 
   async createUser(email: string, password: string) {
     return this.userRepository.createUser(email, password);
