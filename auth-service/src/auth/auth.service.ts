@@ -5,6 +5,7 @@ import {
   Inject,
   ConflictException,
   UnauthorizedException,
+  BadRequestException,
 } from '@nestjs/common';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -26,14 +27,13 @@ export class AuthService {
     registerDto: RegisterDto,
   ): Promise<{ accessToken: string; refreshToken: string }> {
     const { email, password } = registerDto;
-
     const hashedPassword = await bcrypt.hash(password, 10);
 
     try {
       const user = await this.userRepository.createUser(email, hashedPassword);
-      const payload = { email: user.email, id: user.id };
+      const payload = { email: user.email, userId: user.id };
 
-      const accessToken = this.generateJwt(payload, '5m');
+      const accessToken = this.generateJwt(payload, '1d');
       const refreshToken = this.generateJwt(payload, '30d');
 
       // Session creation
@@ -61,11 +61,10 @@ export class AuthService {
     loginDto: LoginDto,
   ): Promise<{ accessToken: string; refreshToken: string }> {
     const { email, password } = loginDto;
-
     const user = await this.userRepository.findByEmail(email);
 
     if (user && (await bcrypt.compare(password, user.password))) {
-      const payload = { email: user.email, id: user.id };
+      const payload = { email: user.email, userId: user.id };
 
       const accessToken = this.generateJwt(payload, '5m');
       const refreshToken = this.generateJwt(payload, '30d');
@@ -86,6 +85,40 @@ export class AuthService {
     } else {
       throw new UnauthorizedException('Invalid credentials');
     }
+  }
+
+  async logout(refreshToken: string): Promise<{ message: string }> {
+    const secretKey = this.configService.get<string>('JWT_SECRET_KEY');
+
+    try {
+      // Verify the refresh token
+      jwt.verify(refreshToken, secretKey) as JwtPayload;
+
+      // Delete the session
+      await this.prisma.session.delete({
+        where: { token: refreshToken },
+      });
+
+      return { message: 'Logged out successfully' };
+    } catch (error) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+  }
+
+  async logoutAll(
+    userId: number,
+    currentRefreshToken: string,
+  ): Promise<{ message: string }> {
+    await this.prisma.session.deleteMany({
+      where: {
+        userId: userId,
+        token: {
+          not: currentRefreshToken, // exclude current session from deleting
+        },
+      },
+    });
+
+    return { message: 'Logged out from all devices' };
   }
 
   async refresh(
@@ -111,8 +144,7 @@ export class AuthService {
         throw new UnauthorizedException('User not found');
       }
 
-      const payload = { email: user.email, id: user.id };
-
+      const payload = { email: user.email, userId: user.id };
       const newAccessToken = this.generateJwt(payload, '5m');
       const newRefreshToken = this.generateJwt(payload, '30d');
 
