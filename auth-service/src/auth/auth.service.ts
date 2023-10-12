@@ -1,11 +1,11 @@
 import * as bcrypt from 'bcrypt';
 import * as jwt from 'jsonwebtoken';
+import * as ms from 'ms';
 import {
   Injectable,
   Inject,
   ConflictException,
   UnauthorizedException,
-  BadRequestException,
 } from '@nestjs/common';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -13,15 +13,29 @@ import { PrismaUserRepository } from 'src/users/repositories/prisma.user.reposit
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'prisma/prisma.service';
 import { JwtPayload } from 'src/types/jwt-payload.interface';
+import { User } from '@prisma/client';
 
 @Injectable()
 export class AuthService {
+  private refreshTokenExpiration: string;
+  private accessTokenExpiration: string;
+
   constructor(
     @Inject('IUserRepository') // Inject using the custom provider token
     private readonly userRepository: PrismaUserRepository,
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
-  ) {}
+  ) {
+    this.refreshTokenExpiration = this.configService.get<string>(
+      'JWT_REFRESH_TOKEN_EXPIRATION',
+      '30d',
+    );
+
+    this.accessTokenExpiration = this.configService.get<string>(
+      'JWT_ACCESS_TOKEN_EXPIRATION',
+      '5m',
+    );
+  }
 
   async register(
     registerDto: RegisterDto,
@@ -31,17 +45,15 @@ export class AuthService {
 
     try {
       const user = await this.userRepository.createUser(email, hashedPassword);
-      const payload = { email: user.email, userId: user.id };
-
-      const accessToken = this.generateJwt(payload, '1d');
-      const refreshToken = this.generateJwt(payload, '30d');
+      const tokens = await this.generateTokens(user);
+      const { accessToken, refreshToken } = tokens;
 
       // Session creation
       await this.prisma.session.create({
         data: {
           userId: user.id,
           token: refreshToken,
-          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days in ms
+          expiresAt: this.getExpirationDate(this.refreshTokenExpiration),
         },
       });
 
@@ -64,17 +76,15 @@ export class AuthService {
     const user = await this.userRepository.findByEmail(email);
 
     if (user && (await bcrypt.compare(password, user.password))) {
-      const payload = { email: user.email, userId: user.id };
-
-      const accessToken = this.generateJwt(payload, '5m');
-      const refreshToken = this.generateJwt(payload, '30d');
+      const tokens = await this.generateTokens(user);
+      const { accessToken, refreshToken } = tokens;
 
       // Session creation
       await this.prisma.session.create({
         data: {
           userId: user.id,
           token: refreshToken,
-          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days in ms
+          expiresAt: this.getExpirationDate(this.refreshTokenExpiration),
         },
       });
 
@@ -144,22 +154,20 @@ export class AuthService {
         throw new UnauthorizedException('User not found');
       }
 
-      const payload = { email: user.email, userId: user.id };
-      const newAccessToken = this.generateJwt(payload, '5m');
-      const newRefreshToken = this.generateJwt(payload, '30d');
+      const newTokens = await this.generateTokens(user);
 
       // Update the session
       await this.prisma.session.update({
         where: { token: refreshToken },
         data: {
-          token: newRefreshToken,
-          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+          token: newTokens.refreshToken,
+          expiresAt: this.getExpirationDate(this.refreshTokenExpiration),
         },
       });
 
       return {
-        accessToken: newAccessToken,
-        refreshToken: newRefreshToken,
+        accessToken: newTokens.accessToken,
+        refreshToken: newTokens.refreshToken,
       };
     } catch (error) {
       throw new UnauthorizedException('Invalid refresh token');
@@ -169,5 +177,19 @@ export class AuthService {
   private generateJwt(payload: any, expiresIn: string): string {
     const secretKey = this.configService.get<string>('JWT_SECRET_KEY');
     return jwt.sign(payload, secretKey, { expiresIn });
+  }
+
+  private async generateTokens(
+    user: User,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
+    const payload = { email: user.email, userId: user.id };
+    const accessToken = this.generateJwt(payload, this.accessTokenExpiration);
+    const refreshToken = this.generateJwt(payload, this.refreshTokenExpiration);
+
+    return { accessToken, refreshToken };
+  }
+
+  private getExpirationDate(expirationTime: string): Date {
+    return new Date(Date.now() + ms(expirationTime));
   }
 }

@@ -20,13 +20,13 @@ export class AuthController {
   }
 
   @Post('logout')
-  async logout(@Body('refreshToken') refreshTokenDto: RefreshTokenDto) {
+  async logout(@Body() refreshTokenDto: RefreshTokenDto) {
     return this.authService.logout(refreshTokenDto.refreshToken);
   }
 
   @Post('logout-all')
   async logoutAll(
-    @Body('refreshToken') refreshTokenDto: RefreshTokenDto,
+    @Body() refreshTokenDto: RefreshTokenDto,
     @Request() req: ExpressRequest,
   ) {
     const userId = req.user.userId;
